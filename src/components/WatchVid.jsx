@@ -11,6 +11,7 @@ const WatchVid = () => {
   const videoRef = useRef(null); // Ref to track video element
   const startTimestampRef = useRef(0); // Track start timestamp
   const lastTimestampRef = useRef(0); // Track last timestamp
+  const calibrationEnded = useRef(false); // Flag to detect calibration end
 
   const videos = {
     video1: "dQw4w9WgXcQ", // Replace these with actual YouTube video IDs
@@ -62,6 +63,14 @@ const WatchVid = () => {
       calibrationPoints.every((point) => point.clicks >= 5)
     ) {
       setIsCalibrating(false); // End calibration when all points are done
+
+      // Reset timers and timestamps
+      setOnVideoTime(0);
+      setOffVideoTime(0);
+      setIsGazingOnVideo(false);
+      const startTime = performance.now();
+      startTimestampRef.current = startTime;
+      calibrationEnded.current = true; // Indicate calibration has just ended
     }
   }, [calibrationPoints]);
 
@@ -70,37 +79,58 @@ const WatchVid = () => {
   };
 
   const handleStartTracking = () => {
-    const startTime = performance.now(); // Record start time
-    startTimestampRef.current = startTime;
-    lastTimestampRef.current = startTime;
-
     webgazer
       .setGazeListener((data, elapsedTime) => {
         if (data == null || !videoRef.current) return;
 
         const { x, y } = data;
+
+        // Adjust videoRect to account for scroll position
         const videoRect = videoRef.current.getBoundingClientRect();
+        const videoRectLeft = videoRect.left + window.scrollX;
+        const videoRectRight = videoRect.right + window.scrollX;
+        const videoRectTop = videoRect.top + window.scrollY;
+        const videoRectBottom = videoRect.bottom + window.scrollY;
 
         // Check if gaze is on the video
         const isOnVideo =
-          x >= videoRect.left &&
-          x <= videoRect.right &&
-          y >= videoRect.top &&
-          y <= videoRect.bottom;
+          x >= videoRectLeft &&
+          x <= videoRectRight &&
+          y >= videoRectTop &&
+          y <= videoRectBottom;
 
         console.log(`Gaze Coordinates: (${x}, ${y})`);
-        console.log("Video Bounds:", videoRect);
-        // Update gaze state and time counters
-        if (isOnVideo !== isGazingOnVideo) {
-          const timeDelta = elapsedTime - lastTimestampRef.current;
+        console.log("Video Bounds:", {
+          left: videoRectLeft,
+          right: videoRectRight,
+          top: videoRectTop,
+          bottom: videoRectBottom,
+        });
 
-          if (isGazingOnVideo) {
-            setOnVideoTime((prev) => prev + timeDelta / 1000);
-          } else {
-            setOffVideoTime((prev) => prev + timeDelta / 1000);
+        if (!isCalibrating) {
+          if (calibrationEnded.current) {
+            // Calibration just ended, reset lastTimestampRef
+            lastTimestampRef.current = elapsedTime;
+            calibrationEnded.current = false;
+            return; // Skip updating timers on this iteration
           }
 
+          const timeDelta = elapsedTime - lastTimestampRef.current;
+
+          if (timeDelta > 0) {
+            // Use current gaze state to update time counters
+            if (isOnVideo) {
+              setOnVideoTime((prev) => prev + timeDelta / 1000);
+            } else {
+              setOffVideoTime((prev) => prev + timeDelta / 1000);
+            }
+          }
+
+          // Update gaze state and timestamp
           setIsGazingOnVideo(isOnVideo);
+          lastTimestampRef.current = elapsedTime;
+        } else {
+          // During calibration, reset lastTimestampRef
           lastTimestampRef.current = elapsedTime;
         }
       })
@@ -198,10 +228,12 @@ const WatchVid = () => {
             ))}
           </div>
         )}
-        <div className="mt-4">
-          <p>Total Gaze On Video: {onVideoTime.toFixed(2)} seconds</p>
-          <p>Total Gaze Off Video: {offVideoTime.toFixed(2)} seconds</p>
-        </div>
+        {!isCalibrating && (
+          <div className="mt-4">
+            <p>Total Gaze On Video: {onVideoTime.toFixed(2)} seconds</p>
+            <p>Total Gaze Off Video: {offVideoTime.toFixed(2)} seconds</p>
+          </div>
+        )}
       </div>
     </div>
   );
