@@ -1,22 +1,30 @@
 import React, { useState, useEffect, useRef } from "react";
 
-const WatchVid = () => {
-  const [videoId, setVideoId] = useState("dQw4w9WgXcQ"); // Default video ID
+const WatchVid = ({ setMetrics, setSelectedOption, metrics }) => {
+  const [videoId, setVideoId] = useState("pwLergHG81c"); // Default video ID
+  const [currentVideoKey, setCurrentVideoKey] = useState("video1"); // Track current video key
   const [isCalibrating, setIsCalibrating] = useState(false); // Calibration state
   const [calibrationPoints, setCalibrationPoints] = useState([]); // Calibration points
   const [onVideoTime, setOnVideoTime] = useState(0); // Total time gaze is on video
   const [offVideoTime, setOffVideoTime] = useState(0); // Total time gaze is off video
   const [isGazingOnVideo, setIsGazingOnVideo] = useState(false); // Track current gaze state
+  const [gazeTransitionCount, setGazeTransitionCount] = useState(0); // Total gaze transitions
 
   const videoRef = useRef(null); // Ref to track video element
   const startTimestampRef = useRef(0); // Track start timestamp
   const lastTimestampRef = useRef(0); // Track last timestamp
   const calibrationEnded = useRef(false); // Flag to detect calibration end
+  const firstGazeTimeRef = useRef(null); // Time of first gaze on video
+  const trackingStartTimeRef = useRef(0); // Tracking start time after calibration
+  const MIN_DWELL_TIME = 500; // Minimum dwell time in milliseconds
+  const gazeStateRef = useRef(isGazingOnVideo);
+  const transitionTimerRef = useRef(null);
+  const stateChangeStartTimeRef = useRef(null);
 
   const videos = {
-    video1: "dQw4w9WgXcQ", // Replace these with actual YouTube video IDs
-    video2: "eYq7WapuDLU",
-    video3: "oHg5SJYRHA0",
+    video1: "pwLergHG81c", // Replace these with actual YouTube video IDs
+    video2: "pZjFpAJfcSY",
+    video3: "9zSVu76AX3I",
   };
 
   // Generate calibration points with IDs and clicks
@@ -67,83 +75,151 @@ const WatchVid = () => {
       // Reset timers and timestamps
       setOnVideoTime(0);
       setOffVideoTime(0);
+      setGazeTransitionCount(0);
       setIsGazingOnVideo(false);
+      gazeStateRef.current = false;
+      firstGazeTimeRef.current = null;
       const startTime = performance.now();
       startTimestampRef.current = startTime;
+      lastTimestampRef.current = startTime;
       calibrationEnded.current = true; // Indicate calibration has just ended
     }
   }, [calibrationPoints]);
 
   const handleVideoChange = (videoKey) => {
     setVideoId(videos[videoKey]);
+    setCurrentVideoKey(videoKey);
   };
 
   const handleStartTracking = () => {
     webgazer
-      .setGazeListener((data, elapsedTime) => {
+      .setGazeListener((data) => {
         if (data == null || !videoRef.current) return;
 
         const { x, y } = data;
 
-        // Adjust videoRect to account for scroll position
+        const currentTime = performance.now();
+
+        // Get video element position
         const videoRect = videoRef.current.getBoundingClientRect();
-        const videoRectLeft = videoRect.left + window.scrollX;
-        const videoRectRight = videoRect.right + window.scrollX;
-        const videoRectTop = videoRect.top + window.scrollY;
-        const videoRectBottom = videoRect.bottom + window.scrollY;
 
         // Check if gaze is on the video
-        const isOnVideo =
-          x >= videoRectLeft &&
-          x <= videoRectRight &&
-          y >= videoRectTop &&
-          y <= videoRectBottom;
-
-        console.log(`Gaze Coordinates: (${x}, ${y})`);
-        console.log("Video Bounds:", {
-          left: videoRectLeft,
-          right: videoRectRight,
-          top: videoRectTop,
-          bottom: videoRectBottom,
-        });
+        const isCurrentlyOnVideo =
+          x >= videoRect.left &&
+          x <= videoRect.right &&
+          y >= videoRect.top &&
+          y <= videoRect.bottom;
 
         if (!isCalibrating) {
           if (calibrationEnded.current) {
-            // Calibration just ended, reset lastTimestampRef
-            lastTimestampRef.current = elapsedTime;
+            // Calibration just ended, reset timestamps and states
+            lastTimestampRef.current = currentTime;
+            trackingStartTimeRef.current = currentTime;
+            setIsGazingOnVideo(isCurrentlyOnVideo);
+            gazeStateRef.current = isCurrentlyOnVideo;
             calibrationEnded.current = false;
-            return; // Skip updating timers on this iteration
+            return;
           }
 
-          const timeDelta = elapsedTime - lastTimestampRef.current;
+          // Record time of first gaze on video
+          if (firstGazeTimeRef.current === null && isCurrentlyOnVideo) {
+            firstGazeTimeRef.current =
+              (currentTime - trackingStartTimeRef.current) / 1000;
+          }
+
+          const timeDelta = currentTime - lastTimestampRef.current;
 
           if (timeDelta > 0) {
-            // Use current gaze state to update time counters
-            if (isOnVideo) {
+            // Use the confirmed gaze state to update time counters
+            if (gazeStateRef.current) {
               setOnVideoTime((prev) => prev + timeDelta / 1000);
             } else {
               setOffVideoTime((prev) => prev + timeDelta / 1000);
             }
           }
 
-          // Update gaze state and timestamp
-          setIsGazingOnVideo(isOnVideo);
-          lastTimestampRef.current = elapsedTime;
+          lastTimestampRef.current = currentTime;
+
+          // Transition handling with dwell time
+          if (gazeStateRef.current !== isCurrentlyOnVideo) {
+            if (transitionTimerRef.current) {
+              // Do nothing, a timer is already running
+            } else {
+              // Record the time when the potential state change started
+              stateChangeStartTimeRef.current = currentTime;
+
+              transitionTimerRef.current = setTimeout(() => {
+                // Store the previous gaze state before updating
+                const prevGazeState = gazeStateRef.current;
+
+                // Confirm the state change after dwell time
+                gazeStateRef.current = isCurrentlyOnVideo;
+                setIsGazingOnVideo(isCurrentlyOnVideo);
+
+                if (!prevGazeState && isCurrentlyOnVideo) {
+                  // Increment transition count when gaze returns to video
+                  setGazeTransitionCount((prevCount) => prevCount + 1);
+                }
+
+                // Reset lastTimestampRef to ensure accurate time calculation
+                lastTimestampRef.current = performance.now();
+
+                // Clear the timer and state change start time
+                transitionTimerRef.current = null;
+                stateChangeStartTimeRef.current = null;
+              }, MIN_DWELL_TIME);
+            }
+          } else {
+            // If the gaze state hasn't changed, and a transition timer is running, cancel it
+            if (transitionTimerRef.current) {
+              clearTimeout(transitionTimerRef.current);
+              transitionTimerRef.current = null;
+              stateChangeStartTimeRef.current = null;
+            }
+          }
         } else {
           // During calibration, reset lastTimestampRef
-          lastTimestampRef.current = elapsedTime;
+          lastTimestampRef.current = currentTime;
         }
       })
       .begin();
 
     // Hide WebGazer video feedback
-    webgazer.showVideo(false).showFaceOverlay(false).showFaceFeedbackBox(false);
+    //webgazer.showVideo(false).showFaceOverlay(false).showFaceFeedbackBox(false);
+  };
+
+  const handleStopTracking = () => {
+    const stopTime = performance.now(); // Record stop time
+    const totalTimeElapsed = (stopTime - startTimestampRef.current) / 1000;
+
+    const onGazePercentage = (
+      (onVideoTime / (onVideoTime + offVideoTime)) *
+      100
+    ).toFixed(2);
+
+    const results = {
+      totalTimeElapsed: totalTimeElapsed.toFixed(2),
+      onGazePercentage: onGazePercentage,
+      timeToFirstGaze:
+        firstGazeTimeRef.current !== null
+          ? firstGazeTimeRef.current.toFixed(2)
+          : null,
+      gazeTransitions: gazeTransitionCount,
+    };
+
+    console.log("Aggregated Results:", results);
+
+    webgazer.end();
+    webgazer.clearGazeListener();
+
+    // Save the metrics for the current video
+    setMetrics(currentVideoKey, results);
+
+    // Do not redirect to CheckEng
   };
 
   return (
     <div className="p-8">
-      <h1 className="text-2xl font-semibold mb-4">Content Area</h1>
-      <p className="mb-8">Welcome to the main content area.</p>
       <div className="flex flex-col items-center">
         <div className="w-full md:w-3/4 lg:w-1/2 aspect-video">
           <iframe
@@ -157,58 +233,38 @@ const WatchVid = () => {
           ></iframe>
         </div>
         <div className="mt-4 flex space-x-4">
+          {Object.keys(videos).map((key) => (
+            <button
+              key={key}
+              onClick={() => handleVideoChange(key)}
+              className={`px-4 py-2 rounded-lg ${
+                currentVideoKey === key
+                  ? "bg-blue-600 text-white"
+                  : "bg-gray-200 text-gray-700 hover:bg-blue-100"
+              }`}
+            >
+              {key.toUpperCase()}
+            </button>
+          ))}
+        </div>
+        <div className="mt-4 flex space-x-4">
           <button
-            onClick={() => handleVideoChange("video1")}
-            className="px-4 py-2 bg-blue-500 text-white rounded-lg"
+            onClick={() => {
+              handleStartTracking();
+              startCalibration();
+            }}
+            className="px-4 py-2 bg-green-500 text-white rounded-lg"
+            disabled={isCalibrating}
           >
-            Video 1
+            Start Eyetracker
           </button>
           <button
-            onClick={() => handleVideoChange("video2")}
-            className="px-4 py-2 bg-blue-500 text-white rounded-lg"
+            onClick={handleStopTracking}
+            className="px-4 py-2 bg-red-500 text-white rounded-lg"
           >
-            Video 2
-          </button>
-          <button
-            onClick={() => handleVideoChange("video3")}
-            className="px-4 py-2 bg-blue-500 text-white rounded-lg"
-          >
-            Video 3
+            Stop Eyetracker
           </button>
         </div>
-        <button
-          onClick={() => {
-            handleStartTracking();
-            startCalibration();
-          }}
-          className="px-4 py-2 bg-blue-500 text-white rounded-lg"
-          disabled={isCalibrating}
-        >
-          Start Eyetracker
-        </button>
-        <button
-          onClick={() => {
-            const stopTime = performance.now(); // Record stop time
-            const totalTimeElapsed =
-              (stopTime - startTimestampRef.current) / 1000;
-
-            console.log(
-              `Total Time Elapsed: ${totalTimeElapsed.toFixed(2)} seconds`
-            );
-            console.log(
-              `Time Elapsed On Video: ${onVideoTime.toFixed(2)} seconds`
-            );
-            console.log(
-              `Time Elapsed Off Video: ${offVideoTime.toFixed(2)} seconds`
-            );
-
-            webgazer.end();
-            webgazer.clearGazeListener();
-          }}
-          className="px-4 py-2 bg-red-500 text-white rounded-lg"
-        >
-          Stop Eyetracker
-        </button>
         {isCalibrating && (
           <div className="fixed inset-0 flex items-center justify-center">
             {calibrationPoints.map((point) => (
@@ -230,8 +286,22 @@ const WatchVid = () => {
         )}
         {!isCalibrating && (
           <div className="mt-4">
-            <p>Total Gaze On Video: {onVideoTime.toFixed(2)} seconds</p>
-            <p>Total Gaze Off Video: {offVideoTime.toFixed(2)} seconds</p>
+            <p>
+              On Gaze Percentage:{" "}
+              {onVideoTime + offVideoTime > 0
+                ? `${(
+                    (onVideoTime / (onVideoTime + offVideoTime)) *
+                    100
+                  ).toFixed(2)} %`
+                : "N/A"}
+            </p>
+            <p>
+              Time of First Gaze on Video:{" "}
+              {firstGazeTimeRef.current !== null
+                ? `${firstGazeTimeRef.current.toFixed(2)} seconds`
+                : "Not yet gazed at video"}
+            </p>
+            <p>Total Gaze Transitions: {gazeTransitionCount}</p>
           </div>
         )}
       </div>
