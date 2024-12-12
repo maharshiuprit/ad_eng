@@ -1,4 +1,4 @@
-# Advertisement Engagement Analysis
+# Analyzing Advertisement Engagement Through Eye Tracking 
 
 This project is a React application built with Vite and styled with Tailwind CSS. It analyzes user engagement with video advertisements using eye-tracking technology.
 
