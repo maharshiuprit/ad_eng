@@ -185,7 +185,7 @@ const WatchVid = ({ setMetrics, setSelectedOption, metrics }) => {
       .begin();
 
     // Hide WebGazer video feedback
-    //webgazer.showVideo(false).showFaceOverlay(false).showFaceFeedbackBox(false);
+    webgazer.showVideo(false).showFaceOverlay(false).showFaceFeedbackBox(false);
   };
 
   const handleStopTracking = () => {
